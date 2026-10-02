@@ -43,7 +43,8 @@ RUN_USER="root"         WORK_DIR="/var/lib/ai-assistant-claude/work"
 SPAWN_MODE="same-dir"   CAPACITY="32"
 MAIN_MODEL=""           WORKER_MODEL="sonnet"     SCOUT_MODEL="haiku"
 AUTO_UPDATE="yes"       HISTORY_DIR=""
-EXPLAIN_NOTIFICATIONS="yes"  GAP_CHECKS="yes"  EXTRA_BLOCKED_PATTERNS=""
+EXPLAIN_NOTIFICATIONS="yes"  GAP_CHECKS="yes"  LOGFS_WARN_PCT="80"  LOGFS_GROWTH_MB="10"
+EXTRA_BLOCKED_PATTERNS=""
 DISCOVERY_DONE="no"     DISCOVERY_VERSION=""   (Unraid version at last discovery)
 TZ=""   (empty = system)
 ```

@@ -41,7 +41,9 @@ version agnostic and uses only bash and the PHP CLI that ship with Unraid (no No
   viewable in the WebGUI.
 - **Unraid notification explanations and gap checks.** New warning and alert notifications get a short
   explanation of what is going on and what to do. Periodic gap checks look for restarting or unhealthy
-  containers and new syslog errors, and only involve Claude when something is found. Both can be switched off.
+  containers, new syslog errors, and RAM filesystems (`/var/log`, `/`, `/run`, `/tmp`) that are filling up or being
+  flooded by a runaway log (for example a browser tab looping on a missing image), and only involve Claude when
+  something is found. Both can be switched off.
 - **Works with the array stopped.** Everything runs from RAM with state mirrored to the flash drive, so the
   assistant can help you while the array is stopped, and it releases `/mnt` when the array stops so it never
   blocks unmounting.
@@ -98,7 +100,9 @@ Settings live in **Utilities > AI Assistant > Settings** and are stored in
 | `AUTO_UPDATE` | `yes` | Update Claude Code before restarts and daily when idle; rolls back if the new version fails to connect. |
 | `HISTORY_DIR` | empty | Optional directory (for example on a share) where session transcripts are copied while the array is started. Empty keeps them in RAM only. |
 | `EXPLAIN_NOTIFICATIONS` | `yes` | Explain new Unraid warning and alert notifications. |
-| `GAP_CHECKS` | `yes` | Periodically check for unhealthy containers and new syslog errors. |
+| `GAP_CHECKS` | `yes` | Periodically check for unhealthy containers, new syslog errors and RAM filesystem / log flood problems. |
+| `LOGFS_WARN_PCT` | `80` | Gap check: warn when `/var/log`, `/`, `/run` or `/tmp` (all in RAM) is this percent full (50-99); at 95% it raises an alert. |
+| `LOGFS_GROWTH_MB` | `10` | Gap check: flag a log flood when `/var/log` grew more than this many MB since the last check (every 15 minutes), or a single file grew by half of it (1-1000). |
 | `SHOW_PAGE_BUTTON` | `yes` | Show the assistant button (Alt+A) on every WebGUI page while the assistant is enabled and logged in. |
 | `BUTTON_STYLE` | `header` | Where the button appears: `header`, `floating` or `both`. |
 | `CHAT_PERMISSION_MODE` | `default` | Starting permission mode of new WebGUI chats (`default` = Manual, `acceptEdits`, `auto`, `plan`). |

@@ -78,8 +78,16 @@ $modes = array('default' => 'Manual', 'acceptEdits' => 'Accept edits', 'auto' =>
   <dt><?= aia_e('Explain Unraid notifications') ?>:</dt>
   <dd><select name="EXPLAIN_NOTIFICATIONS"><?= $bool('EXPLAIN_NOTIFICATIONS') ?></select></dd>
 
-  <dt><?= aia_e('Check for gaps (unhealthy containers, syslog errors)') ?>:</dt>
+  <dt><?= aia_e('Check for gaps (unhealthy containers, syslog errors, log flood)') ?>:</dt>
   <dd><select name="GAP_CHECKS"><?= $bool('GAP_CHECKS') ?></select></dd>
+
+  <dt><?= aia_e('Log filesystem warning level (%)') ?>:</dt>
+  <dd><input type="number" name="LOGFS_WARN_PCT" min="50" max="99" value="<?= aia_h($cfg['LOGFS_WARN_PCT']) ?>" class="narrow">
+    <blockquote class="inline_help"><?= aia_e('The gap check warns when /var/log, the root filesystem, /run or /tmp (all in RAM) is this full; at 95% it raises an alert.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Log growth limit (MB per check)') ?>:</dt>
+  <dd><input type="number" name="LOGFS_GROWTH_MB" min="1" max="1000" value="<?= aia_h($cfg['LOGFS_GROWTH_MB']) ?>" class="narrow">
+    <blockquote class="inline_help"><?= aia_e('Flag a log flood when /var/log grew by more than this since the last check (every 15 minutes), or when a single log file grew by half of it.') ?></blockquote></dd>
 
   <dt><?= aia_e('Show the assistant button on every page') ?>:</dt>
   <dd><select name="SHOW_PAGE_BUTTON"><?= $bool('SHOW_PAGE_BUTTON') ?></select>

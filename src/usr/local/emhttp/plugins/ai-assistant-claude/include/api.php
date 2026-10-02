@@ -157,6 +157,18 @@ function aia_validate_settings(array $in)
             $err[$k] = 'Must be yes or no.';
         }
     }
+    foreach (array('LOGFS_WARN_PCT' => array(50, 99, 'Log filesystem warning level must be a number from 50 to 99.'),
+                   'LOGFS_GROWTH_MB' => array(1, 1000, 'Log growth limit must be a number from 1 to 1000.')) as $k => $def) {
+        $v = $g($k);
+        if ($v === null) {
+            continue;
+        }
+        if (preg_match('/^[0-9]{1,4}$/', $v) && (int)$v >= $def[0] && (int)$v <= $def[1]) {
+            $clean[$k] = (string)(int)$v;
+        } else {
+            $err[$k] = $def[2];
+        }
+    }
     $v = $g('BUTTON_STYLE');
     if ($v !== null) {
         if (in_array($v, array('header', 'floating', 'both'), true)) {
@@ -330,7 +342,7 @@ function aia_action_save_settings()
     // settings the running device does not read (page button, notification helpers) need no restart
     $restart = false;
     foreach ($clean as $k => $v) {
-        if (!in_array($k, array('SHOW_PAGE_BUTTON', 'BUTTON_STYLE', 'CHAT_PERMISSION_MODE', 'EXPLAIN_NOTIFICATIONS', 'GAP_CHECKS'), true) && (!isset($before[$k]) || $before[$k] !== $v)) {
+        if (!in_array($k, array('SHOW_PAGE_BUTTON', 'BUTTON_STYLE', 'CHAT_PERMISSION_MODE', 'EXPLAIN_NOTIFICATIONS', 'GAP_CHECKS', 'LOGFS_WARN_PCT', 'LOGFS_GROWTH_MB'), true) && (!isset($before[$k]) || $before[$k] !== $v)) {
             $restart = true;
         }
     }

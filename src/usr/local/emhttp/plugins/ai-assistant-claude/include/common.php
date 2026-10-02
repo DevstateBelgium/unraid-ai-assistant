@@ -40,6 +40,8 @@ function aia_cfg_defaults()
         'HISTORY_DIR' => '',
         'EXPLAIN_NOTIFICATIONS' => 'yes',
         'GAP_CHECKS' => 'yes',
+        'LOGFS_WARN_PCT' => '80',
+        'LOGFS_GROWTH_MB' => '10',
         'SHOW_PAGE_BUTTON' => 'yes',
         'BUTTON_STYLE' => 'header',
         'CHAT_PERMISSION_MODE' => 'default',

@@ -272,6 +272,8 @@ import_cfg() {
             case "ENABLED": $good = ($argv[3] === "1") && ($v === "yes" || $v === "no"); break;
             case "AUTO_UPDATE": case "EXPLAIN_NOTIFICATIONS": case "GAP_CHECKS": case "SHOW_PAGE_BUTTON": case "DISCOVERY_DONE": $good = ($v === "yes" || $v === "no"); break;
             case "CAPACITY": $good = ctype_digit($v) && (int)$v >= 1 && (int)$v <= 1000; break;
+            case "LOGFS_WARN_PCT": $good = ctype_digit($v) && (int)$v >= 50 && (int)$v <= 99; break;
+            case "LOGFS_GROWTH_MB": $good = ctype_digit($v) && (int)$v >= 1 && (int)$v <= 1000; break;
             case "BUTTON_STYLE": $good = in_array($v, array("header","floating","both"), true); break;
             case "CHAT_PERMISSION_MODE": case "DEVICE_PERMISSION_MODE": $good = in_array($v, array("default","acceptEdits","auto","plan"), true); break;
             case "SPAWN_MODE": $good = in_array($v, array("same-dir","worktree","session"), true); break;
