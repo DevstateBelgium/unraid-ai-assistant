@@ -1,0 +1,30 @@
+Menu="AIAssistant:4"
+Title="Memory"
+Tag="database"
+Markdown="false"
+---
+<?php
+$docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+require_once "$docroot/plugins/ai-assistant-claude/include/i18n.php";
+aia_page_head();
+?>
+<div id="aia-memory" class="aia-root">
+  <div id="aia-mem-msg" class="aia-msg" style="display:none"></div>
+  <p class="aia-hint"><?= aia_e('These files are the assistant\'s long-term memory. Never store passwords or tokens here.') ?></p>
+  <div class="aia-split">
+    <div class="aia-side">
+      <table class="aia-table" id="aia-mem-list"><thead><tr><th><?= aia_e('File') ?></th><th><?= aia_e('Size') ?></th><th><?= aia_e('Modified') ?></th></tr></thead><tbody></tbody></table>
+      <p><button type="button" id="aia-btn-mem-new"><?= aia_e('New file') ?></button>
+         <button type="button" id="aia-btn-mem-refresh"><?= aia_e('Refresh') ?></button></p>
+    </div>
+    <div class="aia-main">
+      <p><strong id="aia-mem-name"><?= aia_e('Select a file') ?></strong></p>
+      <textarea id="aia-mem-text" rows="22" spellcheck="false" disabled style="width:100%"></textarea>
+      <p>
+        <button type="button" id="aia-btn-mem-save" disabled><?= aia_e('Save') ?></button>
+        <button type="button" id="aia-btn-mem-delete" disabled><?= aia_e('Delete') ?></button>
+        <span class="aia-spin" id="aia-spin-mem" style="display:none"></span>
+      </p>
+    </div>
+  </div>
+</div>

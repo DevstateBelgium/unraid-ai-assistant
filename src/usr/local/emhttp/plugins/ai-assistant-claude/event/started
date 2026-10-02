@@ -1,0 +1,5 @@
+#!/bin/bash
+# Array started: only the history needs the array; the assistant itself does not depend on it.
+S=/usr/local/emhttp/plugins/ai-assistant-claude/scripts
+[ -x "$S/sync-state.sh" ] && ( setsid "$S/sync-state.sh" --history-only >/dev/null 2>&1 < /dev/null & )
+exit 0

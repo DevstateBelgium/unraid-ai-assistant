@@ -1,0 +1,10 @@
+dist/
+PLAN.md
+*.bak*
+*.orig
+*~
+.DS_Store
+*.log
+tmp/
+/test-artifacts/
+*.tmp

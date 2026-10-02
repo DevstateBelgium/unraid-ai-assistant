@@ -1,0 +1,458 @@
+#!/bin/bash
+# AI Assistant for Unraid: service control.   rc.ai-assistant boot|start|stop|restart|status|update|sync
+#
+# boot    is called from the .plg at every boot and after install/upgrade; safe to repeat. It prepares
+#         the RAM tree, restores binary + state from flash, renders the managed config, installs cron,
+#         and starts the device if ENABLED=yes. It does NOT depend on the array.
+# status  prints one JSON line for the WebGUI.
+#
+# Shutdown hook (decision): we do not touch /boot/config/stop (a single user-owned file shared with
+# other plugins) nor /etc/rc.d/rc.local_shutdown (RAM copy, regenerated each boot). Instead the state
+# is synced by (1) event/stopping + event/stopped, which fire when Unraid stops the array during a
+# shutdown (rc.local_shutdown calls cmdStop), and (2) the supervisor's TERM handler, which runs
+# sync-state.sh when rc.6 sends SIGTERM to everything. The 10-minute cron bounds the worst case.
+set -u
+LOG_NAME=rc
+cd / || exit 1
+. "$(dirname "$(readlink -f "$0")")/common.sh"
+load_cfg
+
+copy_if_changed() {  # src dst : tmp+mv, only if different
+  [ -f "$1" ] || return 0
+  cmp -s "$1" "$2" 2>/dev/null && return 0
+  cp -f "$1" "$2.tmp$$" && mv -f "$2.tmp$$" "$2"
+}
+
+restore_state() {
+  # RAM wins if it already has a file (a repeated boot must never clobber newer RAM data); flash fills gaps
+  local src f
+  mkdir -p "$CONFIG_DIR" "$MEM_DIR"
+  src=$FLASH_STATE/config
+  if [ -d "$src" ]; then
+    (cd "$src" && find . -type f -print0) | while IFS= read -r -d '' f; do
+      [ -e "$CONFIG_DIR/$f" ] || { mkdir -p "$(dirname "$CONFIG_DIR/$f")"; cp -p "$src/$f" "$CONFIG_DIR/$f"; }
+    done
+  fi
+  src=$FLASH_STATE/memory
+  if [ -d "$src" ]; then
+    (cd "$src" && find . -type f -print0) | while IFS= read -r -d '' f; do
+      [ -e "$MEM_DIR/$f" ] || { mkdir -p "$(dirname "$MEM_DIR/$f")"; cp -p "$src/$f" "$MEM_DIR/$f"; }
+    done
+  fi
+  chmod 600 "$CONFIG_DIR/.credentials.json" 2>/dev/null
+  : > "$RUN_DIR/restored"    # sync-state.sh refuses to run before this exists
+}
+
+install_cron() {
+  local dst=$FLASH/ai-assistant.cron tmp min hour
+  tmp=$(mktemp "$RUN_DIR/cron.XXXXXX") || return 0
+  # the daily auto-update slot is chosen once (random, never minute 0) and then kept, so a reboot does not rewrite flash
+  min=; hour=
+  if [ -r "$dst" ]; then
+    read -r min hour _ < <(grep -E '^[0-9]+ [0-9]+ .*rc\.ai-assistant auto-update' "$dst" | head -1)
+  fi
+  [[ ${min:-} =~ ^[0-9]+$ ]] && [ "$min" -ge 1 ] && [ "$min" -le 59 ] || min=$(( RANDOM % 59 + 1 ))
+  [[ ${hour:-} =~ ^[0-9]+$ ]] && [ "$hour" -le 23 ] || hour=$(( RANDOM % 4 + 2 ))
+  sed "s|@EMHTTP@|$EMHTTP|g; s|@MIN@|$min|g; s|@HOUR@|$hour|g" "$EMHTTP/cron/ai-assistant.cron" > "$tmp"
+  if ! cmp -s "$tmp" "$dst" 2>/dev/null; then
+    cp -f "$tmp" "$dst" && log "cron file installed"
+  fi
+  rm -f "$tmp"
+}
+
+# Unraid's update_cron concatenates /boot/config/plugins/<plugin>/*.cron for every plugin that has a symlink
+# /var/log/plugins/<plugin>.plg, and the plugin manager only creates that symlink AFTER the install steps
+# (i.e. after we ran). So wait for it in the background, then refresh. Skipped in sandboxes.
+defer_update_cron() {
+  [ -z "${AIA_FLASH:-}" ] && [ -x /usr/local/sbin/update_cron ] || return 0
+  ( setsid bash -c 'for i in $(seq 1 60); do [ -e /var/log/plugins/ai-assistant-claude.plg ] && break; sleep 2; done; /usr/local/sbin/update_cron' \
+      >/dev/null 2>&1 < /dev/null & )
+}
+
+remove_cron() {  # used by plugin removal: rc.ai-assistant uninstall-cron
+  rm -f "$FLASH/ai-assistant.cron"
+  [ -z "${AIA_FLASH:-}" ] && [ -x /usr/local/sbin/update_cron ] && /usr/local/sbin/update_cron
+}
+
+do_boot() {
+  mkdir -p "$FLASH_BIN" "$FLASH_STATE" 2>/dev/null
+  prep_ram
+  # binary: flash -> RAM (only when different; the exec bit exists on RAM only)
+  if [ -s "$FLASH_BIN/claude" ]; then
+    if ! cmp -s "$FLASH_BIN/claude" "$RAM_BIN/claude" 2>/dev/null; then
+      cp "$FLASH_BIN/claude" "$RAM_BIN/claude.new" && chmod 755 "$RAM_BIN/claude.new" && mv -f "$RAM_BIN/claude.new" "$RAM_BIN/claude"
+      log "binary copied to RAM"
+    fi
+    copy_if_changed "$FLASH_BIN/claude.version" "$RAM_BIN/claude.version"
+  fi
+  restore_state
+  "$SCRIPTS/render-config.sh" >/dev/null 2>&1
+  install_cron
+  defer_update_cron
+  # No download here: the binary is fetched when the user clicks Install in the WebGUI (or, with ENABLED=yes and
+  # no cached binary, by the supervisor's own loop), so boot and plugin install never wait for the network.
+  [ "$ENABLED" = yes ] && do_start >/dev/null
+  log "boot done (enabled=$ENABLED)"
+}
+
+do_start() {
+  load_cfg; prep_ram
+  [ "$ENABLED" = yes ] || { json_obj ok:b=false error="not enabled"; return 0; }
+  if [ -n "$(supervisor_pid)" ]; then json_obj ok:b=true note="already running"; return 0; fi
+  ( setsid nohup "$SCRIPTS/supervisor.sh" >> "$LOG_DIR/supervisor.log" 2>&1 < /dev/null 7>&- & )   # 7>&-: never inherit the ops lock
+  for _ in $(seq 1 10); do sleep 0.5; [ -n "$(supervisor_pid)" ] && break; done
+  [ -n "$(supervisor_pid)" ] && json_obj ok:b=true || json_obj ok:b=false error="supervisor did not start (see $LOG_DIR/supervisor.log)"
+}
+
+do_stop() {
+  local p; p=$(supervisor_pid)
+  if [ -n "$p" ]; then
+    kill -TERM "$p" 2>/dev/null
+    for _ in $(seq 1 60); do kill -0 "$p" 2>/dev/null || break; sleep 0.5; done   # its handler syncs state (<= 25 s)
+    kill -0 "$p" 2>/dev/null && { kill -KILL "$p" 2>/dev/null; pkill -KILL -s "$p" 2>/dev/null; }
+  fi
+  state_set running:b=false connected:b=false
+  "$SCRIPTS/sync-state.sh" --force >/dev/null 2>&1
+  json_obj ok:b=true
+}
+
+do_status() {
+  local inst=false ver= run=false con=false lin=false email= org= disc=none nl=0
+  [ -x "$RAM_BIN/claude" ] || [ -s "$FLASH_BIN/claude" ] && inst=true
+  [ "$inst" = true ] && ver=$(claude_version)
+  [ -n "$(supervisor_pid)" ] && run=true
+  [ "$run" = true ] && [ "$(json_get "$STATE_JSON" connected 2>/dev/null)" = true ] && con=true
+  # auth status costs a process start, so reuse login.sh's cache for up to 60 s
+  local ac=$RUN_DIR/auth.json age=999999
+  [ -e "$ac" ] && age=$(( $(date +%s) - $(stat -c %Y "$ac") ))
+  if [ "$inst" = true ] && [ "$age" -gt 60 ] && [ -x "$RAM_BIN/claude" ]; then "$SCRIPTS/login.sh" status >/dev/null 2>&1; fi
+  if [ -e "$ac" ]; then
+    lin=$(json_get "$ac" loggedIn 2>/dev/null || echo false)
+    email=$(json_get "$ac" email 2>/dev/null || true); org=$(json_get "$ac" orgName 2>/dev/null || true)
+  fi
+  # discovery state is written by discover.sh into state.json; fall back to the cfg flag
+  disc=$(json_get "$STATE_JSON" discovery_state 2>/dev/null || true)
+  nl=$(json_get "$STATE_JSON" notify_last 2>/dev/null); [[ ${nl:-} =~ ^[0-9]+$ ]] || nl=0
+  [ -n "$disc" ] || { [ "$DISCOVERY_DONE" = yes ] && disc=done || disc=none; }
+  json_obj installed:b=$inst version="$ver" running:b=$run connected:b=$con enabled:b="$([ "$ENABLED" = yes ] && echo true || echo false)" \
+    logged_in:b="${lin:-false}" email="$email" org="$org" device="$DEVICE" discovery="$disc" unraid_version="$(unraid_version)" notify_last:i="$nl"
+}
+
+# ---- maintenance: wipe / export / import / uninstall / auto-update ------------------------------------
+IMPORT_MAX_BYTES=${AIA_IMPORT_MAX_BYTES:-67108864}   # 64 MiB unpacked
+IMPORT_MAX_ENTRIES=5000
+
+lock_ops() {  # one maintenance operation at a time (wipe/export/import/auto-update)
+  mkdir -p "$RUN_DIR" 2>/dev/null
+  exec 7>"$RUN_DIR/ops.lock"
+  flock -w 120 7 || { json_obj ok:b=false error="another maintenance operation is running"; exit 0; }
+}
+
+safe_rm() {  # rm -rf, refusing anything that looks like a system directory
+  local d
+  for d in "$@"; do
+    case "$d" in
+      ""|/|/boot|/boot/config|/boot/config/plugins|/var|/var/lib|/usr|/usr/local|/mnt|/root|/etc|/tmp) log "refusing to remove '$d'"; continue ;;
+    esac
+    rm -rf -- "$d"
+  done
+}
+
+plugin_version() { head -n1 "$EMHTTP/VERSION" 2>/dev/null || echo unknown; }
+
+do_wipe() {
+  local hist=${HISTORY_DIR:-} hn=0 hk=false lo=false f
+  lock_ops
+  log "wipe: start"
+  "$SCRIPTS/discover.sh" cancel >/dev/null 2>&1
+  "$SCRIPTS/login.sh" cancel >/dev/null 2>&1
+  do_stop >/dev/null
+  # best effort: tell Anthropic the token is dead (also removes both credential copies)
+  if [ -x "$RAM_BIN/claude" ] && "$SCRIPTS/login.sh" logout >/dev/null 2>&1; then lo=true; fi
+  safe_rm "$FLASH_STATE" "$FLASH_BIN" "$CONFIG_DIR" "$MEM_DIR" "$LOG_DIR" "$HOME_BASE" "$RAM_BIN" "$RUN_DIR/login" "$RUN_DIR/user"
+  for f in "$RUN_DIR"/*; do   # runtime state, but keep lock files (we hold one)
+    case "$f" in *.lock|*.lock.*) ;; *) [ -f "$f" ] && rm -f -- "$f" ;; esac
+  done
+  rm -f -- "$CFG_FILE" "$CFG_FILE".tmp* "$FLASH/ai-assistant.cron.tmp"*   # back to default.cfg
+  if [ -n "$hist" ] && [ -d "$hist" ]; then hk=true; hn=$(find "$hist" -type f 2>/dev/null | wc -l); fi
+  # leave a clean, usable skeleton behind (the plugin stays installed)
+  load_cfg
+  mkdir -p "$FLASH_BIN" "$FLASH_STATE" 2>/dev/null
+  prep_ram
+  : > "$RUN_DIR/restored"
+  "$SCRIPTS/render-config.sh" >/dev/null 2>&1
+  log "wipe: done (history dir '${hist:-none}' kept, $hn files)"
+  json_obj ok:b=true wiped:b=true logged_out:b=$lo history_dir="$hist" history_kept:b=$hk history_files:i="$hn" \
+    message="All plugin data was removed. Session history in the history directory was NOT touched."
+}
+
+do_export() {
+  local out=${1:-} incl=0 a st f n
+  shift || true
+  for a in "$@"; do [ "$a" = --include-credentials ] && incl=1; done
+  [[ $out == /* ]] && [ -d "$(dirname "$out")" ] || { json_obj ok:b=false error="usage: export <absolute-output.tar.gz> [--include-credentials]"; return 0; }
+  lock_ops
+  mkdir -p "$RAM"
+  st=$(mktemp -d "$RAM/tmp.XXXXXX") || { json_obj ok:b=false error="cannot create a temp dir"; return 0; }
+  mkdir -p "$st/cfg" "$st/config/agents" "$st/memory"
+  chmod 700 "$st"
+  [ -f "$CFG_FILE" ] && cp -f "$CFG_FILE" "$st/cfg/ai-assistant-claude.cfg"
+  for f in settings.user.json CLAUDE.md; do
+    if [ -f "$CONFIG_DIR/$f" ]; then cp -f "$CONFIG_DIR/$f" "$st/config/$f"
+    elif [ -f "$FLASH_STATE/config/$f" ]; then cp -f "$FLASH_STATE/config/$f" "$st/config/$f"; fi
+  done
+  [ -d "$CONFIG_DIR/agents" ] && find "$CONFIG_DIR/agents" -maxdepth 1 -type f -name '*.md' -exec cp -f -t "$st/config/agents" {} +
+  # memory: live copy, flash mirror as fallback (e.g. right after boot before anything was edited)
+  local msrc=$MEM_DIR; [ -d "$msrc" ] && [ -n "$(ls -A "$msrc" 2>/dev/null)" ] || msrc=$FLASH_STATE/memory
+  [ -d "$msrc" ] && (cd "$msrc" && find . -type f ! -name '*.tmp[0-9]*' -print0 | xargs -0 -r cp --parents -t "$st/memory")
+  if [ $incl = 1 ]; then
+    for f in "$CONFIG_DIR/.credentials.json" "$FLASH_STATE/config/.credentials.json"; do
+      [ -f "$f" ] && { cp -f "$f" "$st/config/.credentials.json"; chmod 600 "$st/config/.credentials.json"; break; }
+    done
+  fi
+  local files
+  files=$(cd "$st" && find . -type f -print | sed 's|^\./||' | LC_ALL=C sort)
+  json_obj format:i=1 plugin="$PLUGIN" plugin_version="$(plugin_version)" created:i="$(date +%s)" host="$(hostname)" \
+    unraid_version="$(unraid_version)" includes_credentials:b=$([ $incl = 1 ] && [ -f "$st/config/.credentials.json" ] && echo true || echo false) \
+    files:j="$(printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 php "$LIB_PHP" list)" > "$st/manifest.json"
+  if (umask 077; tar --owner=0 --group=0 --numeric-owner -C "$st" -czf "$out.part" manifest.json cfg config memory) 2>/dev/null \
+     && mv -f "$out.part" "$out"; then
+    n=$(printf '%s\n' "$files" | grep -c .)
+    log "export: $n files to $out (credentials=$incl)"
+    json_obj ok:b=true file="$out" bytes:i="$(stat -c %s "$out")" files:i="$n" includes_credentials:b=$([ -f "$st/config/.credentials.json" ] && echo true || echo false)
+  else
+    rm -f "$out.part"; json_obj ok:b=false error="could not write the archive"
+  fi
+  rm -rf -- "$st"
+}
+
+# validate_archive <file>: prints a reason and returns 1 when the archive is not acceptable
+validate_archive() {
+  local f=$1 names verbose nn nv line type size total=0 name
+  gzip -t -- "$f" 2>/dev/null || { echo "not a valid gzip file"; return 1; }
+  names=$(timeout 120 tar -tzf "$f" 2>/dev/null | head -n $((IMPORT_MAX_ENTRIES + 1))) || true
+  verbose=$(timeout 120 tar -tvzf "$f" 2>/dev/null | head -n $((IMPORT_MAX_ENTRIES + 1))) || true
+  [ -n "$names" ] || { echo "empty or unreadable archive"; return 1; }
+  nn=$(printf '%s\n' "$names" | wc -l); nv=$(printf '%s\n' "$verbose" | wc -l)
+  [ "$nn" -le "$IMPORT_MAX_ENTRIES" ] || { echo "too many entries"; return 1; }
+  [ "$nn" = "$nv" ] || { echo "archive listing is inconsistent"; return 1; }
+  while IFS= read -r line; do
+    type=${line:0:1}
+    case "$type" in -|d) ;; *) echo "archive contains a non-regular member (type '$type')"; return 1 ;; esac
+    read -r _ _ size _ <<< "$line"
+    [[ $size =~ ^[0-9]+$ ]] || { echo "archive listing is unreadable"; return 1; }
+    total=$((total + size))
+  done <<< "$verbose"
+  [ "$total" -le "$IMPORT_MAX_BYTES" ] || { echo "archive is too large when unpacked ($total bytes)"; return 1; }
+  while IFS= read -r name; do
+    name=${name#./}; name=${name%/}
+    [ -n "$name" ] || { echo "empty member name"; return 1; }
+    [[ $name == /* ]] && { echo "absolute path in archive: $name"; return 1; }
+    case "$name" in *[[:cntrl:]]*|*\\*) echo "unsafe characters in a member name"; return 1 ;; esac
+    case "/$name/" in *//*|*/./*|*/../*) echo "unsafe path in archive: $name"; return 1 ;; esac
+    case "$name" in
+      manifest.json|cfg|cfg/ai-assistant-claude.cfg|config|config/settings.user.json|config/CLAUDE.md|config/.credentials.json|config/agents|config/agents/*.md|memory|memory/*) ;;
+      *) echo "unexpected member in archive: $name"; return 1 ;;
+    esac
+  done <<< "$names"
+  return 0
+}
+
+# import_cfg <cfg> <allow_enabled 0|1>: validated merge of the archive's settings into the flash cfg
+import_cfg() {
+  php -r '
+    require $argv[1];
+    $known = aia_cfg_defaults();
+    $in = aia_cfg_parse_file($argv[2], $known);
+    $ok = array(); $skip = array();
+    $badpre = array("/boot","/proc","/sys","/dev","/etc","/bin","/sbin","/usr","/lib","/lib64","/root","/run");
+    foreach ($in as $k => $v) {
+        $good = false;
+        switch ($k) {
+            case "ENABLED": $good = ($argv[3] === "1") && ($v === "yes" || $v === "no"); break;
+            case "AUTO_UPDATE": case "EXPLAIN_NOTIFICATIONS": case "GAP_CHECKS": case "SHOW_PAGE_BUTTON": case "DISCOVERY_DONE": $good = ($v === "yes" || $v === "no"); break;
+            case "CAPACITY": $good = ctype_digit($v) && (int)$v >= 1 && (int)$v <= 1000; break;
+            case "BUTTON_STYLE": $good = in_array($v, array("header","floating","both"), true); break;
+            case "CHAT_PERMISSION_MODE": case "DEVICE_PERMISSION_MODE": $good = in_array($v, array("default","acceptEdits","auto","plan"), true); break;
+            case "SPAWN_MODE": $good = in_array($v, array("same-dir","worktree","session"), true); break;
+            case "MAIN_MODEL": case "WORKER_MODEL": case "SCOUT_MODEL": $good = $v === "" || (bool)preg_match("/^[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,99}$/", $v); break;
+            case "DEVICE_NAME": $good = $v === "" || (bool)preg_match("/^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$/", $v); break;
+            case "DISCOVERY_VERSION": $good = (bool)preg_match("/^[A-Za-z0-9._-]{0,40}$/", $v); break;
+            case "TZ": $good = (bool)preg_match("~^[A-Za-z0-9_+/.-]{0,64}$~", $v) && strpos($v, "..") === false; break;
+            case "RUN_USER": $good = in_array($v, aia_users(), true); break;
+            case "EXTRA_BLOCKED_PATTERNS": $good = strlen($v) <= 4000; break;
+            case "WORK_DIR": case "HISTORY_DIR":
+                $good = ($v === "" && $k === "HISTORY_DIR") || (strlen($v) <= 255 && $v[0] === "/" && strpos($v, "..") === false && strpos($v, "//") === false
+                    && (bool)preg_match("~^/[A-Za-z0-9._/ +@=,-]+$~", $v));
+                if ($good) { foreach ($badpre as $b) { if ($v === $b || strncmp($v, $b . "/", strlen($b) + 1) === 0) { $good = false; } } }
+                break;
+        }
+        if ($good) { $ok[$k] = $v; } else { $skip[] = $k; }
+    }
+    $saved = $ok ? aia_cfg_save($ok) : true;
+    echo json_encode(array("saved" => $saved, "applied" => array_keys($ok), "skipped" => $skip)), "\n";
+  ' -- "$EMHTTP/include/common.php" "$1" "$2"
+}
+
+# install_file <src> <dst> [mode]: atomic copy into RAM
+install_file() {
+  mkdir -p "$(dirname "$2")"
+  cp -f -- "$1" "$2.imp$$" && chmod "${3:-644}" "$2.imp$$" && mv -f "$2.imp$$" "$2"
+}
+
+do_import() {
+  local f=${1:-} why st n=0 creds=0 was_running=false cr m
+  [ -f "$f" ] || { json_obj ok:b=false error="usage: import <file.tar.gz>"; return 0; }
+  lock_ops
+  why=$(validate_archive "$f") || { log "import rejected: $why"; json_obj ok:b=false error="$why"; return 0; }
+  mkdir -p "$RAM"
+  st=$(mktemp -d "$RAM/tmp.XXXXXX") || { json_obj ok:b=false error="cannot create a temp dir"; return 0; }
+  chmod 700 "$st"
+  if ! timeout 120 tar -xzf "$f" -C "$st" --no-same-owner --no-same-permissions 2>/dev/null; then
+    rm -rf -- "$st"; json_obj ok:b=false error="could not unpack the archive"; return 0
+  fi
+  # second line of defence, on what actually landed on disk
+  if [ -n "$(find "$st" ! -type f ! -type d -print -quit)" ]; then rm -rf -- "$st"; json_obj ok:b=false error="archive contains non-regular files"; return 0; fi
+  if [ "$(json_get "$st/manifest.json" format 2>/dev/null)" != 1 ] || [ "$(json_get "$st/manifest.json" plugin 2>/dev/null)" != "$PLUGIN" ]; then
+    rm -rf -- "$st"; json_obj ok:b=false error="this is not an AI Assistant export (manifest missing or unsupported)"; return 0
+  fi
+  [ -n "$(supervisor_pid)" ] && was_running=true
+  [ -s "$st/config/.credentials.json" ] && creds=1
+  local skipped=()
+  # settings (validated key by key; ENABLED only travels with credentials, otherwise activation stays explicit)
+  local cfgres='{"applied":[],"skipped":[]}'
+  if [ -f "$st/cfg/ai-assistant-claude.cfg" ]; then
+    cfgres=$(import_cfg "$st/cfg/ai-assistant-claude.cfg" "$creds") || cfgres='{"applied":[],"skipped":[]}'
+    n=$((n + 1))
+  fi
+  load_cfg; prep_ram
+  # config files
+  if [ -f "$st/config/settings.user.json" ]; then
+    if php "$LIB_PHP" valid "$st/config/settings.user.json"; then install_file "$st/config/settings.user.json" "$CONFIG_DIR/settings.user.json"; n=$((n + 1))
+    else skipped+=(settings.user.json); fi
+  fi
+  [ -f "$st/config/CLAUDE.md" ] && { install_file "$st/config/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md"; n=$((n + 1)); }
+  if [ -d "$st/config/agents" ]; then
+    for cr in "$st"/config/agents/*.md; do [ -f "$cr" ] && { install_file "$cr" "$CONFIG_DIR/agents/$(basename "$cr")"; n=$((n + 1)); }; done
+  fi
+  if [ "$creds" = 1 ]; then
+    if php "$LIB_PHP" valid "$st/config/.credentials.json"; then
+      install_file "$st/config/.credentials.json" "$CONFIG_DIR/.credentials.json" 600; n=$((n + 1)); rm -f "$RUN_DIR/auth.json"
+    else skipped+=(.credentials.json); creds=0; fi
+  fi
+  # memory: merge, archive files win on a name clash; nothing existing is deleted
+  if [ -d "$st/memory" ]; then
+    while IFS= read -r -d '' m; do
+      install_file "$st/memory/$m" "$MEM_DIR/$m"; n=$((n + 1))
+    done < <(cd "$st/memory" && find . -type f -print0 | sed -z 's|^\./||')
+  fi
+  rm -rf -- "$st"
+  prep_ram   # fix ownership for RUN_USER
+  "$SCRIPTS/render-config.sh" >/dev/null 2>&1
+  "$SCRIPTS/sync-state.sh" --force >/dev/null 2>&1
+  local restarted=false
+  if [ "$was_running" = true ]; then do_stop >/dev/null; do_start >/dev/null; restarted=true; fi
+  log "import: $n files restored (credentials=$creds, restarted=$restarted)"
+  json_obj ok:b=true restored:i="$n" credentials:b=$([ $creds = 1 ] && echo true || echo false) restarted:b=$restarted \
+    config="$cfgres" skipped:j="$(php "$LIB_PHP" list "${skipped[@]+"${skipped[@]}"}")"
+}
+
+# used by the .plg remove step: stop everything and drop the RAM tree. Flash data (cfg, binary cache, state) is kept.
+do_uninstall() {
+  log "uninstall: start"
+  "$SCRIPTS/discover.sh" cancel >/dev/null 2>&1
+  "$SCRIPTS/login.sh" cancel >/dev/null 2>&1
+  "$SCRIPTS/stop-sessions.sh" >/dev/null 2>&1      # sessions holding /mnt first, so the array can still stop
+  do_stop >/dev/null                               # supervisor and its whole session
+  "$SCRIPTS/sync-state.sh" --force >/dev/null 2>&1
+  remove_cron
+  safe_rm "$RAM"
+  json_obj ok:b=true kept="$FLASH" message="Plugin removed. Your settings, memory and login are kept in $FLASH."
+}
+
+# ---- daily auto-update (cron) -------------------------------------------------------------------------
+descends_from() {  # $1 pid $2 ancestor
+  local p=$1 i=0 st pp
+  while [ "$p" -gt 1 ] && [ $i -lt 40 ]; do
+    [ "$p" = "$2" ] && return 0
+    st=$(cat "/proc/$p/stat" 2>/dev/null) || return 1
+    st=${st##*) }                     # the command name may contain spaces/parens: split after the LAST ") "
+    read -r _ pp _ <<< "$st"          # state ppid ...
+    [ -n "$pp" ] || return 1
+    p=$pp; i=$((i + 1))
+  done
+  return 1
+}
+
+# claude processes under the supervisor that are not the remote-control server itself (= running sessions),
+# plus a running discovery or login flow
+active_sessions() {
+  local sup d p
+  sup=$(supervisor_pid)
+  if [ -n "$sup" ]; then
+    for d in /proc/[0-9]*; do
+      p=${d#/proc/}
+      [ "$(cat "$d/comm" 2>/dev/null)" = claude ] || continue
+      tr '\0' ' ' < "$d/cmdline" 2>/dev/null | grep -q 'remote-control' && continue
+      if descends_from "$p" "$sup"; then echo "$p"; fi
+    done
+  fi
+  [ "$(json_get "$STATE_JSON" discovery_state 2>/dev/null)" = running ] && echo discovery
+  local lp; lp=$(cat "$RUN_DIR/login/pid" 2>/dev/null)
+  [ -n "$lp" ] && kill -0 "$lp" 2>/dev/null && echo login
+  return 0
+}
+
+do_auto_update() {
+  LOG_NAME=auto-update
+  if [ "${AUTO_UPDATE:-yes}" != yes ]; then log "AUTO_UPDATE=no, nothing to do"; json_obj ok:b=true action=skipped reason="auto update disabled"; return 0; fi
+  exec 7>"$RUN_DIR/ops.lock"
+  flock -n 7 || { log "another maintenance operation is running, retry tomorrow"; json_obj ok:b=true action=skipped reason="busy"; return 0; }
+  local chk inst ua latest have act r
+  chk=$("$SCRIPTS/install-claude.sh" --check --auto 2>/dev/null)
+  if [ "$(printf '%s' "$chk" | json_get - ok 2>/dev/null)" != true ]; then
+    log "version check failed (offline?), retry tomorrow"; json_obj ok:b=true action=skipped reason="version check failed"; return 0
+  fi
+  inst=$(printf '%s' "$chk" | json_get - installed 2>/dev/null)
+  ua=$(printf '%s' "$chk" | json_get - update_available 2>/dev/null)
+  latest=$(printf '%s' "$chk" | json_get - latest 2>/dev/null); have=$(printf '%s' "$chk" | json_get - version 2>/dev/null)
+  if [ "$inst" != true ]; then log "Claude Code is not installed yet, nothing to update"; json_obj ok:b=true action=skipped reason="not installed"; return 0; fi
+  if [ "$ua" != true ]; then log "up to date ($have)"; json_obj ok:b=true action=none reason="up to date" version="$have"; return 0; fi
+  act=$(active_sessions | tr '\n' ' ')
+  if [ -n "${act// /}" ]; then
+    log "update $have -> $latest postponed: active sessions ($act), retry tomorrow"
+    json_obj ok:b=true action=postponed reason="active sessions" version="$have" latest="$latest"; return 0
+  fi
+  log "updating $have -> $latest"
+  r=$("$SCRIPTS/install-claude.sh" --auto 2>/dev/null)
+  if [ "$(printf '%s' "$r" | json_get - ok 2>/dev/null)" != true ]; then
+    log "update failed: $(printf '%s' "$r" | json_get - error 2>/dev/null); retry tomorrow"
+    json_obj ok:b=true action=failed reason="install failed" version="$have" latest="$latest"; return 0
+  fi
+  if [ "$(printf '%s' "$r" | json_get - updated 2>/dev/null)" = true ] && [ -n "$(printf '%s' "$r" | json_get - previous 2>/dev/null)" ]; then
+    echo 0 > "$FLASH_BIN/update.pending"    # probation: the supervisor rolls back if the new binary cannot connect
+  fi
+  if [ -n "$(supervisor_pid)" ]; then do_stop >/dev/null; do_start >/dev/null; log "supervisor restarted on $(claude_version)"; fi
+  log "update done: $(claude_version)"
+  json_obj ok:b=true action=updated version="$(claude_version)" previous="$have"
+}
+
+case "${1:-status}" in
+  boot)    do_boot ;;
+  start)   do_start ;;
+  stop)    do_stop ;;
+  restart) do_stop >/dev/null; do_start ;;
+  status)  do_status ;;
+  update)
+    # install the newest binary now, then restart so it takes effect
+    r=$("$SCRIPTS/install-claude.sh" --force 2>/dev/null); printf '%s\n' "$r"
+    [ "$(printf '%s' "$r" | json_get - ok 2>/dev/null)" = true ] && [ -n "$(supervisor_pid)" ] && { do_stop >/dev/null; do_start >/dev/null; } ;;
+  auto-update) do_auto_update ;;
+  sync)    "$SCRIPTS/sync-state.sh" --force ;;
+  wipe)    do_wipe ;;
+  export)  shift; do_export "$@" ;;
+  import)  shift; do_import "$@" ;;
+  uninstall) do_uninstall ;;
+  uninstall-cron) remove_cron ;;
+  *) echo "usage: $0 boot|start|stop|restart|status|update|auto-update|sync|wipe|export <out.tar.gz> [--include-credentials]|import <file.tar.gz>|uninstall" >&2; exit 2 ;;
+esac

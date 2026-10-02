@@ -1,0 +1,9 @@
+# AI Assistant for Unraid: mirror changed state files RAM -> flash every 10 minutes.
+# The @...@ placeholders below are replaced by rc.ai-assistant when it copies this file to /boot/config/plugins/ai-assistant-claude/.
+*/10 * * * * @EMHTTP@/scripts/sync-state.sh >/dev/null 2>&1
+# Daily binary update when idle (minute/hour are picked once at first boot, never :00, to spread the load on the download host).
+@MIN@ @HOUR@ * * * @EMHTTP@/scripts/rc.ai-assistant auto-update >/dev/null 2>&1
+# Explain new Unraid warning/alert notifications (exits at once when disabled, not logged in, or nothing new).
+* * * * * @EMHTTP@/scripts/notify-explain.sh >/dev/null 2>&1
+# Gap check: restarting/unhealthy containers and new syslog errors; Claude is only asked when something is found.
+*/15 * * * * @EMHTTP@/scripts/gap-check.sh >/dev/null 2>&1

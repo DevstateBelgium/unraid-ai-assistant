@@ -1,0 +1,17 @@
+Menu="AIAssistant:2"
+Title="Chat"
+Tag="comments-o"
+Markdown="false"
+---
+<?php
+$docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+require_once "$docroot/plugins/ai-assistant-claude/include/i18n.php";
+require_once "$docroot/plugins/ai-assistant-claude/include/button.php";
+aia_page_head();
+aia_chat_tab_head();
+?>
+<div class="aia-root" style="max-width:none">
+  <p class="aia-disclaimer"><i class="fa fa-info-circle"></i>
+    <?= aia_e('This is the same assistant as in the Claude app: same memory, same hooks, same blocked commands. Changes ask for your permission here.') ?></p>
+  <div id="aia-chat-root"></div>
+</div>

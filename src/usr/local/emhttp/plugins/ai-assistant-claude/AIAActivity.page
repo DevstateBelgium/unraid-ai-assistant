@@ -1,0 +1,29 @@
+Menu="AIAssistant:5"
+Title="Activity"
+Tag="list"
+Markdown="false"
+---
+<?php
+$docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+require_once "$docroot/plugins/ai-assistant-claude/include/i18n.php";
+aia_page_head();
+?>
+<div id="aia-activity" class="aia-root">
+  <div id="aia-act-msg" class="aia-msg" style="display:none"></div>
+  <p class="aia-hint"><?= aia_e('Commands and file changes made by the assistant (newest first, last 2000 entries).') ?></p>
+  <p>
+    <select id="aia-act-tool"><option value=""><?= aia_e('All tools') ?></option></select>
+    <input type="text" id="aia-act-q" placeholder="<?= aia_h(aia_t('Search...')) ?>">
+    <label><input type="checkbox" id="aia-act-auto"> <?= aia_e('Auto-refresh') ?></label>
+    <button type="button" id="aia-btn-act-refresh"><?= aia_e('Refresh') ?></button>
+  </p>
+  <table class="aia-table" id="aia-act-table"><thead><tr>
+    <th><?= aia_e('Time') ?></th><th><?= aia_e('Tool') ?></th><th><?= aia_e('Summary') ?></th><th><?= aia_e('Directory') ?></th>
+  </tr></thead><tbody></tbody></table>
+  <p class="aia-pager">
+    <button type="button" id="aia-act-prev">&laquo;</button>
+    <span id="aia-act-page"></span>
+    <button type="button" id="aia-act-next">&raquo;</button>
+    <span id="aia-act-total" class="aia-hint"></span>
+  </p>
+</div>

@@ -1,0 +1,125 @@
+Menu="AIAssistant:3"
+Title="Settings"
+Tag="gears"
+Markdown="false"
+---
+<?php
+$docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+require_once "$docroot/plugins/ai-assistant-claude/include/i18n.php";
+aia_page_head();
+$cfg = aia_cfg();
+$users = aia_users();
+$modelOpts = function ($key, $withDefault) use ($cfg) {
+    $cur = $cfg[$key];
+    $std = array('opus' => 'Opus', 'sonnet' => 'Sonnet', 'haiku' => 'Haiku');
+    $isStd = isset($std[$cur]);
+    $isDef = ($withDefault && $cur === '') || (!$withDefault && ($cur === '' || $cur === 'inherit'));
+    $o = '<option value="default"' . ($isDef ? ' selected' : '') . '>' . aia_e($withDefault ? 'Default (Claude Code decides)' : 'Same as main model') . '</option>';
+    foreach ($std as $k => $label) {
+        $o .= '<option value="' . $k . '"' . ($cur === $k ? ' selected' : '') . '>' . aia_h($label) . '</option>';
+    }
+    $custom = !$isDef && !$isStd;
+    $o .= '<option value="custom"' . ($custom ? ' selected' : '') . '>' . aia_e('Custom model ID...') . '</option>';
+    return array($o, $custom ? $cur : '');
+};
+$bool = function ($key) use ($cfg) {
+    return '<option value="yes"' . ($cfg[$key] === 'yes' ? ' selected' : '') . '>' . aia_e('Yes') . '</option>'
+         . '<option value="no"' . ($cfg[$key] === 'no' ? ' selected' : '') . '>' . aia_e('No') . '</option>';
+};
+$modes = array('default' => 'Manual', 'acceptEdits' => 'Accept edits', 'auto' => 'Auto', 'plan' => 'Plan');
+?>
+<form id="aia-settings" class="aia-root" onsubmit="return false">
+<div id="aia-set-msg" class="aia-msg" style="display:none"></div>
+<dl>
+  <dt><?= aia_e('Device name') ?>:</dt>
+  <dd><input type="text" name="DEVICE_NAME" maxlength="64" value="<?= aia_h($cfg['DEVICE_NAME']) ?>" placeholder="<?= aia_h(php_uname('n') . '-assistant') ?>">
+    <blockquote class="inline_help"><?= aia_e('Name shown in the Claude app. Empty means hostname-assistant.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Run as user') ?>:</dt>
+  <dd><select name="RUN_USER" id="aia-run-user">
+    <?php foreach ($users as $u): ?>
+      <option value="<?= aia_h($u) ?>"<?= $u === $cfg['RUN_USER'] ? ' selected' : '' ?>><?= aia_h($u) ?></option>
+    <?php endforeach; ?>
+    </select>
+    <div id="aia-root-warn" class="aia-redwarn" style="display:none"><i class="fa fa-warning"></i>
+      <?= aia_e('Warning: as root the assistant can change anything on this server. A regular user limits the damage, but may be unable to read some system information.') ?></div></dd>
+
+  <dt><?= aia_e('Working directory') ?>:</dt>
+  <dd><input type="text" name="WORK_DIR" id="aia-work-dir" maxlength="255" value="<?= aia_h($cfg['WORK_DIR']) ?>">
+    <div id="aia-workdir-warn" class="aia-redwarn" style="display:none"><i class="fa fa-warning"></i>
+      <?= aia_e('A working directory under /mnt can block stopping the array. Prefer the default in RAM.') ?></div></dd>
+
+  <dt><?= aia_e('Session mode') ?>:</dt>
+  <dd><select name="SPAWN_MODE">
+    <?php foreach (array('same-dir', 'worktree', 'session') as $m): ?>
+      <option value="<?= $m ?>"<?= $m === $cfg['SPAWN_MODE'] ? ' selected' : '' ?>><?= aia_h($m) ?></option>
+    <?php endforeach; ?>
+    </select></dd>
+
+  <dt><?= aia_e('Capacity (parallel sessions)') ?>:</dt>
+  <dd><input type="number" name="CAPACITY" min="1" max="256" value="<?= aia_h($cfg['CAPACITY']) ?>" class="narrow"></dd>
+
+  <?php foreach (array('MAIN_MODEL' => array('Main model', true), 'WORKER_MODEL' => array('Worker model', false), 'SCOUT_MODEL' => array('Scout model', false)) as $key => $def):
+      list($opts, $customVal) = $modelOpts($key, $def[1]); ?>
+  <dt><?= aia_e($def[0]) ?>:</dt>
+  <dd><select class="aia-model-sel" data-for="<?= $key ?>"><?= $opts ?></select>
+    <input type="text" class="aia-model-custom" data-for="<?= $key ?>" maxlength="100" placeholder="claude-..." value="<?= aia_h($customVal) ?>" style="<?= $customVal === '' ? 'display:none' : '' ?>">
+    <input type="hidden" name="<?= $key ?>" value="<?= aia_h($cfg[$key]) ?>"></dd>
+  <?php endforeach; ?>
+
+  <dt><?= aia_e('Update automatically') ?>:</dt>
+  <dd><select name="AUTO_UPDATE"><?= $bool('AUTO_UPDATE') ?></select>
+    <blockquote class="inline_help"><?= aia_e('Update Claude Code before each restart; roll back automatically if the new version fails to connect.') ?></blockquote></dd>
+
+  <dt><?= aia_e('History directory') ?>:</dt>
+  <dd><input type="text" name="HISTORY_DIR" maxlength="255" value="<?= aia_h($cfg['HISTORY_DIR']) ?>" placeholder="/mnt/user/appdata/ai-assistant-claude/history">
+    <blockquote class="inline_help"><?= aia_e('Optional. Session transcripts are copied here while the array is started. Empty keeps them in RAM only.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Explain Unraid notifications') ?>:</dt>
+  <dd><select name="EXPLAIN_NOTIFICATIONS"><?= $bool('EXPLAIN_NOTIFICATIONS') ?></select></dd>
+
+  <dt><?= aia_e('Check for gaps (unhealthy containers, syslog errors)') ?>:</dt>
+  <dd><select name="GAP_CHECKS"><?= $bool('GAP_CHECKS') ?></select></dd>
+
+  <dt><?= aia_e('Show the assistant button on every page') ?>:</dt>
+  <dd><select name="SHOW_PAGE_BUTTON"><?= $bool('SHOW_PAGE_BUTTON') ?></select>
+    <blockquote class="inline_help"><?= aia_e('A button (Alt+A) that opens the assistant next to the page you are on and sends what is on the screen along with your question. Only shown while the assistant is enabled and logged in.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Button style') ?>:</dt>
+  <dd><select name="BUTTON_STYLE">
+    <?php foreach (array('header' => 'Header icon', 'floating' => 'Floating button', 'both' => 'Both') as $m => $label): ?>
+      <option value="<?= $m ?>"<?= $m === $cfg['BUTTON_STYLE'] ? ' selected' : '' ?>><?= aia_e($label) ?></option>
+    <?php endforeach; ?>
+    </select>
+    <blockquote class="inline_help"><?= aia_e('Where the assistant opens from: an icon in the WebGUI header, a floating button, or both. Alt+A always works. Only applies while the button above is on.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Permission mode for new chats') ?>:</dt>
+  <dd><select name="CHAT_PERMISSION_MODE">
+    <?php foreach ($modes as $m => $label): ?>
+      <option value="<?= $m ?>"<?= $m === $cfg['CHAT_PERMISSION_MODE'] ? ' selected' : '' ?>><?= aia_e($label) ?></option>
+    <?php endforeach; ?>
+    </select>
+    <blockquote class="inline_help"><?= aia_e('Starting mode of new conversations in the WebGUI chat; every conversation can switch mode in its own dropdown. Manual: read-only commands run, everything else asks you. Accept edits: file edits are approved automatically. Auto: a classifier approves routine actions and blocks risky ones (needs a supported model and account, otherwise Claude Code falls back to Manual). Plan: read-only planning. Bypass and do-not-ask modes are not offered. The blocked-command list (destructive patterns) stays active in every mode.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Permission mode for app sessions') ?>:</dt>
+  <dd><select name="DEVICE_PERMISSION_MODE">
+    <?php foreach ($modes as $m => $label): ?>
+      <option value="<?= $m ?>"<?= $m === $cfg['DEVICE_PERMISSION_MODE'] ? ' selected' : '' ?>><?= aia_e($label) ?></option>
+    <?php endforeach; ?>
+    </select>
+    <blockquote class="inline_help"><?= aia_e('Permission mode of sessions started from the Claude app (remote control). Changing it restarts the assistant. The blocked-command list (destructive patterns) stays active in every mode.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Time zone') ?>:</dt>
+  <dd><input type="text" name="TZ" maxlength="64" value="<?= aia_h($cfg['TZ']) ?>" placeholder="Europe/Brussels">
+    <blockquote class="inline_help"><?= aia_e('Empty uses the system time zone.') ?></blockquote></dd>
+
+  <dt><?= aia_e('Extra blocked command patterns') ?>:</dt>
+  <dd><textarea name="EXTRA_BLOCKED_PATTERNS" rows="4" cols="60" spellcheck="false"><?= aia_h(str_replace('|', "\n", $cfg['EXTRA_BLOCKED_PATTERNS'])) ?></textarea>
+    <blockquote class="inline_help"><?= aia_e('One regular expression per line. Matching commands are always blocked, on top of the built-in list.') ?></blockquote></dd>
+
+  <dt>&nbsp;</dt>
+  <dd><button type="button" id="aia-btn-save-settings"><?= aia_e('Save') ?></button>
+    <span class="aia-spin" id="aia-spin-settings" style="display:none"></span>
+    <span class="aia-hint"><?= aia_e('Saving restarts the assistant if it is running.') ?></span></dd>
+</dl>
+</form>

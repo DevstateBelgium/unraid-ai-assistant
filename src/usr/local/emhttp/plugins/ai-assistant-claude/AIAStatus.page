@@ -1,0 +1,78 @@
+Menu="AIAssistant:1"
+Title="Status"
+Tag="heartbeat"
+Markdown="false"
+---
+<?php
+$docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+require_once "$docroot/plugins/ai-assistant-claude/include/i18n.php";
+aia_page_head();
+?>
+<div id="aia-status" class="aia-root">
+  <p class="aia-disclaimer"><i class="fa fa-info-circle"></i>
+    <?= aia_e('Unofficial plugin, not affiliated with or endorsed by Anthropic. Requires a claude.ai subscription.') ?></p>
+  <div id="aia-msg" class="aia-msg" style="display:none"></div>
+
+  <div class="aia-grid">
+    <div class="aia-card" id="aia-card-install">
+      <h3><?= aia_e('Install') ?></h3>
+      <p><?= aia_e('Claude Code:') ?> <span id="aia-install-state" class="aia-val">...</span></p>
+      <p class="aia-actions">
+        <button type="button" id="aia-btn-install"><?= aia_e('Install Claude') ?></button>
+        <span class="aia-spin" id="aia-spin-install" style="display:none"></span>
+      </p>
+    </div>
+
+    <div class="aia-card" id="aia-card-account">
+      <h3><?= aia_e('Account') ?></h3>
+      <p id="aia-account-state" class="aia-val">...</p>
+      <p class="aia-actions">
+        <button type="button" id="aia-btn-login"><?= aia_e('Start login') ?></button>
+        <button type="button" id="aia-btn-logout" style="display:none"><?= aia_e('Log out') ?></button>
+        <span class="aia-spin" id="aia-spin-login" style="display:none"></span>
+      </p>
+      <div id="aia-login-box" style="display:none">
+        <p><?= aia_e('1. Open this link, sign in with your claude.ai account and copy the code it shows:') ?></p>
+        <p><a id="aia-login-url" href="#" target="_blank" rel="noopener noreferrer"><?= aia_e('Open login page') ?></a>
+          <button type="button" id="aia-btn-copy"><?= aia_e('Copy link') ?></button></p>
+        <p><?= aia_e('2. Paste the code here:') ?></p>
+        <p><input type="text" id="aia-login-code" autocomplete="off" spellcheck="false" maxlength="400" style="width:90%">
+          <button type="button" id="aia-btn-code"><?= aia_e('Submit') ?></button>
+          <button type="button" id="aia-btn-login-cancel"><?= aia_e('Cancel') ?></button></p>
+      </div>
+    </div>
+
+    <div class="aia-card" id="aia-card-assistant">
+      <h3><?= aia_e('Assistant') ?></h3>
+      <table class="aia-kv">
+        <tr><td><?= aia_e('Enabled') ?></td><td id="aia-as-enabled">-</td></tr>
+        <tr><td><?= aia_e('Running') ?></td><td id="aia-as-running">-</td></tr>
+        <tr><td><?= aia_e('Connected') ?></td><td id="aia-as-connected">-</td></tr>
+        <tr><td><?= aia_e('Device name') ?></td><td id="aia-as-device">-</td></tr>
+        <tr><td><?= aia_e('Unraid version') ?></td><td id="aia-as-unraid">-</td></tr>
+      </table>
+      <p class="aia-actions">
+        <button type="button" id="aia-btn-enable"><?= aia_e('Enable') ?></button>
+        <button type="button" id="aia-btn-disable"><?= aia_e('Disable') ?></button>
+        <button type="button" id="aia-btn-start"><?= aia_e('Start') ?></button>
+        <button type="button" id="aia-btn-stop"><?= aia_e('Stop') ?></button>
+        <button type="button" id="aia-btn-restart"><?= aia_e('Restart') ?></button>
+        <button type="button" id="aia-btn-update"><?= aia_e('Update now') ?></button>
+        <span class="aia-spin" id="aia-spin-assistant" style="display:none"></span>
+      </p>
+    </div>
+
+    <div class="aia-card" id="aia-card-discovery">
+      <h3><?= aia_e('Discovery') ?></h3>
+      <p><?= aia_e('State:') ?> <span id="aia-disc-state" class="aia-val">-</span>
+        <span class="aia-spin" id="aia-spin-disc" style="display:none"></span></p>
+      <div id="aia-disc-preflight" style="display:none" class="aia-warnbox"></div>
+      <ul id="aia-disc-steps" class="aia-steps"></ul>
+      <p id="aia-disc-summary" class="aia-summary" style="display:none"></p>
+      <p class="aia-actions">
+        <button type="button" id="aia-btn-disc-again"><?= aia_e('Run discovery again') ?></button>
+        <button type="button" id="aia-btn-disc-cancel" style="display:none"><?= aia_e('Cancel discovery') ?></button>
+      </p>
+    </div>
+  </div>
+</div>

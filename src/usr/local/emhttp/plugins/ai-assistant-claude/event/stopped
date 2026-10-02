@@ -1,0 +1,6 @@
+#!/bin/bash
+# Array stopped (also reached on shutdown): persist state to flash.
+S=/usr/local/emhttp/plugins/ai-assistant-claude/scripts
+cd / || exit 0
+[ -x "$S/sync-state.sh" ] && timeout 60 "$S/sync-state.sh" --force >/dev/null 2>&1
+exit 0

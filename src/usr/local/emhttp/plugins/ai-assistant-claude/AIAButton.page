@@ -1,0 +1,21 @@
+Menu="Buttons:99"
+Title="AI Assistant"
+Icon="fa-comments-o"
+Code="f0e6"
+Cond="(@include_once($docroot.'/plugins/ai-assistant-claude/include/button.php')) && aia_button_enabled()"
+---
+<?php
+// Cond: the include is parenthesised on purpose (include has lower precedence than &&).
+// Rendered inside <head> on every WebGUI page while the button is enabled (see include/button.php).
+// No Link= on purpose: Unraid then adds a header icon calling AIAButton() (BUTTON_STYLE=floating hides it with CSS).
+// The chat panel itself is built by js/aia-chat.js; everything except AIAButton() lives in the window.AIAChat namespace.
+if (function_exists('aia_button_head')) { aia_button_head(); }
+?>
+<script>
+function AIAButton() {
+  try {
+    var c = window.AIAChat;
+    if (c && c.togglePanel) { c.togglePanel(); } else if (c) { c.pendingToggle = true; }
+  } catch (e) { /* never break the page */ }
+}
+</script>

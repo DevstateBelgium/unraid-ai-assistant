@@ -1,0 +1,103 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+<!ENTITY name      "ai-assistant-claude">
+<!ENTITY author    "DevstateBelgium">
+<!ENTITY version   "@VERSION@">
+<!ENTITY launch    "Utilities/AIAssistant">
+<!ENTITY icon      "comments-o">
+<!ENTITY pluginURL "https://raw.githubusercontent.com/DevstateBelgium/unraid-ai-assistant/main/plugin/ai-assistant-claude.plg">
+<!ENTITY supportURL "@SUPPORT_URL@">
+<!ENTITY sha256    "@SHA256@">
+<!ENTITY txz       "ai-assistant-claude-@VERSION@-noarch-1.txz">
+<!ENTITY flash     "/boot/config/plugins/ai-assistant-claude">
+]>
+<!-- @GENERATED@ -->
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" icon="&icon;"@PLUGINURL_ATTR@ support="&supportURL;">
+
+<CHANGES>
+@CHANGES@
+</CHANGES>
+
+<!-- 1. Pre-flight: refuse to install on an unsupported system, with a readable reason. No min= on purpose. -->
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+fail() { echo ""; echo "ERROR: AI Assistant for Unraid cannot be installed: $1"; echo ""; exit 1; }
+[ "$(uname -m)" = "x86_64" ] || fail "this plugin supports x86_64 only (this machine is $(uname -m))."
+missing=""
+for t in curl script flock php; do command -v "$t" >/dev/null 2>&1 || missing="$missing $t"; done
+command -v setpriv >/dev/null 2>&1 || command -v su >/dev/null 2>&1 || missing="$missing setpriv-or-su"
+[ -z "$missing" ] || fail "required tools are missing:$missing"
+exit 0
+]]>
+</INLINE>
+</FILE>
+
+<!-- 2. Upgrade: stop a running assistant, then remove every installed version of the package. Flash data stays. -->
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+RC=/usr/local/emhttp/plugins/ai-assistant-claude/scripts/rc.ai-assistant
+if [ -x "$RC" ]; then
+  echo "Stopping the running assistant ..."
+  timeout 90 "$RC" stop >/dev/null 2>&1
+fi
+for p in /var/log/packages/ai-assistant-claude-*; do
+  [ -e "$p" ] || continue
+  echo "Removing old package $(basename "$p") ..."
+  removepkg "$(basename "$p")" >/dev/null 2>&1
+done
+exit 0
+]]>
+</INLINE>
+</FILE>
+
+<!-- 3. The package (cached on flash, so a reboot reinstalls it without network). -->
+<FILE Name="&flash;/&txz;" Run="upgradepkg --install-new">
+@TXZ_SOURCE@
+<SHA256>&sha256;</SHA256>
+</FILE>
+
+<!-- 4. Post-install: drop older cached packages, then bring the runtime up in the background (never waits for the network). -->
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+cd /boot/config/plugins/ai-assistant-claude 2>/dev/null && for f in ai-assistant-claude-*.txz; do
+  [ -e "$f" ] || continue
+  [ "$f" = "ai-assistant-claude-@VERSION@-noarch-1.txz" ] || { echo "Deleting old cached package $f"; rm -f -- "$f"; }
+done
+RC=/usr/local/emhttp/plugins/ai-assistant-claude/scripts/rc.ai-assistant
+if [ ! -x "$RC" ]; then echo "ERROR: package did not install correctly ($RC is missing)"; exit 1; fi
+# Detached with its own session and no inherited pipes, otherwise the plugin installer would wait for it.
+# The Claude Code binary is only downloaded when you click Install in the WebGUI (unless it is already cached on flash).
+( setsid timeout 300 "$RC" boot >/dev/null 2>&1 < /dev/null & )
+echo ""
+echo "AI Assistant for Unraid @VERSION@ installed. Open Utilities > AI Assistant to log in."
+echo "This is an unofficial community plugin, not affiliated with Anthropic or Lime Technology."
+exit 0
+]]>
+</INLINE>
+</FILE>
+
+<!-- Removal: stop everything, remove code and RAM data, KEEP the flash data (settings, memory, login). -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+<![CDATA[
+RC=/usr/local/emhttp/plugins/ai-assistant-claude/scripts/rc.ai-assistant
+if [ -x "$RC" ]; then timeout 120 "$RC" uninstall >/dev/null 2>&1; fi
+for p in /var/log/packages/ai-assistant-claude-*; do
+  [ -e "$p" ] || continue
+  removepkg "$(basename "$p")" >/dev/null 2>&1
+done
+rm -rf /usr/local/emhttp/plugins/ai-assistant-claude
+rm -f /boot/config/plugins/ai-assistant-claude/ai-assistant-claude-*.txz
+echo ""
+echo "AI Assistant for Unraid was removed."
+echo "Your settings, memory and login were KEPT in /boot/config/plugins/ai-assistant-claude/"
+echo "(delete that folder to remove them for good, or use 'Wipe all data' in the plugin before removing it)."
+exit 0
+]]>
+</INLINE>
+</FILE>
+
+</PLUGIN>

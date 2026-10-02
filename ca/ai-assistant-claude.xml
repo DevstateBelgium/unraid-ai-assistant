@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>AI Assistant for Unraid (for Claude Code)</Name>
+  <PluginURL>https://raw.githubusercontent.com/DevstateBelgium/unraid-ai-assistant/main/plugin/ai-assistant-claude.plg</PluginURL>
+  <PluginAuthor>DevstateBelgium</PluginAuthor>
+  <Category>Tools:Utilities Tools:System AI: Plugins:</Category>
+  <Support>https://forums.unraid.net/</Support>
+  <Project>https://github.com/DevstateBelgium/unraid-ai-assistant</Project>
+  <Icon>https://raw.githubusercontent.com/DevstateBelgium/unraid-ai-assistant/main/src/usr/local/emhttp/plugins/ai-assistant-claude/images/ai-assistant.png</Icon>
+  <Overview>Manage your Unraid server by talking to Claude Code. The server shows up as a Remote Control device in the Claude app, and the WebGUI gets a chat tab and an "ask the assistant" button that sees the page you are on. It learns your server on first run and remembers it, delegates routine work to cheaper models, blocks destructive commands, masks secrets, and explains Unraid notifications. Requires a Claude subscription. Unofficial: not affiliated with Anthropic or Lime Technology.</Overview>
+  <Changes>[b]See the change log inside the plugin, or CHANGELOG.md in the project repository.[/b]</Changes>
+</Container>

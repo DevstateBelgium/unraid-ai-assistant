@@ -1,0 +1,44 @@
+Menu="AIAssistant:6"
+Title="Advanced"
+Tag="wrench"
+Markdown="false"
+---
+<?php
+$docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+require_once "$docroot/plugins/ai-assistant-claude/include/i18n.php";
+aia_page_head();
+?>
+<div id="aia-advanced" class="aia-root">
+  <div id="aia-adv-msg" class="aia-msg" style="display:none"></div>
+
+  <h3><?= aia_e('settings.json overrides') ?></h3>
+  <p class="aia-hint"><?= aia_e('A JSON object that is merged over the managed Claude Code settings. Invalid JSON is rejected.') ?></p>
+  <textarea id="aia-adv-settings" rows="12" spellcheck="false" style="width:100%"></textarea>
+
+  <h3><?= aia_e('Your CLAUDE.md instructions') ?></h3>
+  <p class="aia-hint"><?= aia_e('Added below the managed block of CLAUDE.md. The managed block itself cannot be edited.') ?></p>
+  <textarea id="aia-adv-claude" rows="12" spellcheck="false" style="width:100%"></textarea>
+  <p><button type="button" id="aia-btn-adv-save"><?= aia_e('Save and apply') ?></button>
+     <span class="aia-spin" id="aia-spin-adv" style="display:none"></span></p>
+
+  <h3><?= aia_e('Backup') ?></h3>
+  <form id="aia-export-form" method="post" action="/plugins/ai-assistant-claude/include/api.php">
+    <input type="hidden" name="action" value="export">
+    <input type="hidden" name="csrf_token" value="<?= aia_h(aia_csrf_token()) ?>">
+    <label><input type="checkbox" name="include_credentials" value="1" id="aia-exp-cred"> <?= aia_e('Include login credentials') ?></label>
+    <div id="aia-exp-warn" class="aia-redwarn" style="display:none"><i class="fa fa-warning"></i>
+      <?= aia_e('The archive then contains your Claude login. Anyone with the file can use your account. Store it safely.') ?></div>
+    <p><button type="submit"><?= aia_e('Export') ?></button></p>
+  </form>
+  <p><input type="file" id="aia-imp-file" accept=".gz,.tgz,application/gzip">
+     <button type="button" id="aia-btn-import"><?= aia_e('Import') ?></button>
+     <span class="aia-spin" id="aia-spin-imp" style="display:none"></span></p>
+
+  <h3 class="aia-danger-h"><?= aia_e('Danger zone') ?></h3>
+  <div class="aia-dangerbox">
+    <p><?= aia_e('Log out and delete all settings, memory, credentials and history of this plugin (flash, RAM and history directory). The plugin code stays installed.') ?></p>
+    <p><?= aia_e('Type DELETE to confirm:') ?> <input type="text" id="aia-wipe-confirm" autocomplete="off" style="width:8em">
+       <button type="button" id="aia-btn-wipe" disabled><?= aia_e('Delete all data') ?></button>
+       <span class="aia-spin" id="aia-spin-wipe" style="display:none"></span></p>
+  </div>
+</div>

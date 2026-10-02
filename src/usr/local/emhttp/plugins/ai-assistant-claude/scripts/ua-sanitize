@@ -1,0 +1,149 @@
+#!/usr/bin/php
+<?php
+/*
+ * ua-sanitize - run a READ-ONLY command and mask secret values in its output.
+ *
+ * Usage (no shell is involved; arguments are passed straight to the program):
+ *   ua-sanitize docker inspect [-f FMT|--format FMT|--type T|-s] NAME...
+ *   ua-sanitize container-env NAME...            (env of a container, via docker inspect)
+ *   ua-sanitize docker compose [-f FILE|-p NAME|--project-directory DIR|--env-file FILE]... config [-q|--format F|--services|--no-interpolate|...]
+ *   ua-sanitize docker-compose [same options] config
+ *   ua-sanitize cat FILE...                       (secret key files are refused)
+ *   ua-sanitize --selftest
+ * Masks: KEY=VALUE, "Key": "value", YAML key: value (incl. block scalars), user:pass@ URLs,
+ * Bearer/Basic, JWT/known token shapes, PEM private keys - for names containing
+ * pass|pwd|token|secret|key|auth|cred|private|salt|jwt|dsn|cookie|signature.
+ * Exit code = that of the wrapped command (2 usage / refused).
+ */
+require_once dirname(__DIR__) . '/hooks/hooklib.php';
+
+function ua_die($msg, $code = 2) { fwrite(STDERR, "ua-sanitize: $msg\n"); exit($code); }
+
+function ua_docker_bin() {
+    foreach (array('/usr/bin/docker', '/usr/local/bin/docker', '/bin/docker') as $p) if (is_executable($p)) return $p;
+    return 'docker';
+}
+
+/** Validate argv and return array(argv-to-exec|null, file-list|null, error|null). */
+function ua_plan($a) {
+    if (!count($a)) return array(null, null, 'no command given');
+    $c = $a[0];
+    if ($c === 'cat') {
+        $files = array();
+        foreach (array_slice($a, 1) as $f) {
+            if ($f === '-n' || $f === '--') continue;
+            if (strlen($f) && $f[0] === '-') return array(null, null, 'cat option not allowed: ' . $f);
+            $files[] = $f;
+        }
+        if (!count($files)) return array(null, null, 'cat needs a file');
+        foreach ($files as $f) {
+            if (preg_match('~(^|/)(\.credentials\.json|shadow|id_[a-z0-9]+|[^/]*\.pem|[^/]*\.key|authorized_keys|ssh_host_[a-z0-9_]+_key|\.htpasswd)$~i', $f)) return array(null, null, 'refusing to read key/credential file: ' . $f);
+            if (preg_match('~^/(proc/kcore|dev/)~', $f)) return array(null, null, 'not allowed: ' . $f);
+        }
+        return array(null, $files, null);
+    }
+    if ($c === 'container-env') {
+        $names = array_slice($a, 1);
+        if (!count($names)) return array(null, null, 'container-env needs a container name');
+        foreach ($names as $n) if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]*$/', $n)) return array(null, null, 'bad container name: ' . $n);
+        return array(array_merge(array(ua_docker_bin(), 'inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}'), $names), null, null);
+    }
+    if ($c === 'docker' && isset($a[1]) && $a[1] === 'inspect') {
+        $rest = array_slice($a, 2);
+        for ($i = 0; $i < count($rest); $i++) {
+            $x = $rest[$i];
+            if ($x === '-f' || $x === '--format' || $x === '--type') { $i++; if ($i >= count($rest)) return array(null, null, 'missing value for ' . $x); continue; }
+            if (preg_match('/^--(format|type)=/', $x) || $x === '-s' || $x === '--size') continue;
+            if (strlen($x) && $x[0] === '-') return array(null, null, 'docker inspect option not allowed: ' . $x);
+        }
+        return array(array_merge(array(ua_docker_bin(), 'inspect'), $rest), null, null);
+    }
+    if (($c === 'docker' && isset($a[1]) && $a[1] === 'compose') || $c === 'docker-compose') {
+        $rest = array_slice($a, $c === 'docker' ? 2 : 1);
+        $i = 0; $seenConfig = false;
+        $out = $c === 'docker' ? array(ua_docker_bin(), 'compose') : array('docker-compose');
+        for (; $i < count($rest); $i++) {
+            $x = $rest[$i];
+            if ($seenConfig) {
+                if (in_array($x, array('-q', '--quiet', '--services', '--volumes', '--images', '--profiles', '--no-interpolate', '--no-normalize', '--no-consistency', '--resolve-image-digests', '--no-path-resolution', '--hash'), true)) { $out[] = $x; continue; }
+                if ($x === '--format' || $x === '-o' || $x === '--output') { $out[] = $x; $i++; if ($i >= count($rest)) return array(null, null, 'missing value'); if ($x !== '--format' && $rest[$i] !== '-') return array(null, null, 'output to file not allowed'); $out[] = $rest[$i]; continue; }
+                return array(null, null, 'docker compose config option not allowed: ' . $x);
+            }
+            if ($x === 'config') { $seenConfig = true; $out[] = $x; continue; }
+            if (in_array($x, array('-f', '--file', '-p', '--project-name', '--project-directory', '--env-file', '--profile'), true)) { $out[] = $x; $i++; if ($i >= count($rest)) return array(null, null, 'missing value for ' . $x); $out[] = $rest[$i]; continue; }
+            return array(null, null, 'only "config" is allowed for docker compose (got ' . $x . ')');
+        }
+        if (!$seenConfig) return array(null, null, 'docker compose: only "config" is allowed');
+        return array($out, null, null);
+    }
+    return array(null, null, 'command not allowed: ' . $c . ' (allowed: docker inspect, container-env, docker compose config, cat)');
+}
+
+function ua_run($argv_exec) {
+    $desc = array(0 => array('file', '/dev/null', 'r'), 1 => array('pipe', 'w'), 2 => array('pipe', 'w'));
+    $p = @proc_open($argv_exec, $desc, $pipes, '/', null);
+    if (!is_resource($p)) return array(127, '', 'cannot execute ' . $argv_exec[0]);
+    $out = stream_get_contents($pipes[1]); fclose($pipes[1]);
+    $err = stream_get_contents($pipes[2]); fclose($pipes[2]);
+    $rc = proc_close($p);
+    return array($rc, $out, $err);
+}
+
+function ua_selftest() {
+    $fail = 0;
+    $cases = array(
+        array("MYSQL_PASSWORD=pa55w0rd\nTZ=UTC\n", array('pa55w0rd'), array('TZ=UTC')),
+        array('["PATH=/usr/bin","DB_PASS=s3cr3t value","API_KEY=abc123"]', array('s3cr3t', 'abc123'), array('PATH=/usr/bin')),
+        array('{"Name":"x","Token":"abcdef","Image":"foo"}', array('abcdef'), array('"Image":"foo"')),
+        array("services:\n  a:\n    environment:\n      - SECRET_KEY=zz11\n      PASSWORD: \"hunter2\"\n    image: nginx\n    private_key: |\n      line1\n      line2\n    ports:\n      - 80:80\n", array('zz11', 'hunter2', 'line1', 'line2'), array('image: nginx', '80:80')),
+        array('DATABASE_URL=postgres://user:topsecret@db/x', array('topsecret'), array()),
+        array('url: https://bob:pw12345@host/path', array('pw12345'), array('bob:')),
+        array("Authorization: Bearer abcdefghijklmnop\n", array('abcdefghijklmnop'), array()),
+        array("-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----", array('MIIabc'), array()),
+    );
+    foreach ($cases as $c) {
+        $o = aia_mask($c[0]);
+        foreach ($c[1] as $bad) if (strpos($o, $bad) !== false) { echo "FAIL: '$bad' leaked in: $o\n"; $fail++; }
+        foreach ($c[2] as $good) if (strpos($o, $good) === false) { echo "FAIL: '$good' lost in: $o\n"; $fail++; }
+    }
+    // allow / refuse planning
+    $ok = array(
+        array('docker', 'inspect', 'plex'), array('docker', 'inspect', '-f', '{{.Config.Env}}', 'plex'), array('container-env', 'plex'),
+        array('docker', 'compose', '-f', '/x/compose.yml', 'config'), array('docker-compose', 'config', '--services'), array('cat', '/boot/config/docker.cfg'),
+    );
+    $no = array(
+        array('docker', 'rm', 'x'), array('docker', 'compose', 'up'), array('docker', 'compose', 'config', '-o', '/tmp/x'), array('docker', 'inspect', '--evil'),
+        array('cat', '/etc/shadow'), array('cat', '/root/.ssh/id_ed25519'), array('cat', '-A', '/etc/passwd'), array('rm', '-rf', '/'), array('container-env', 'a;b'), array(),
+        array('cat', '/boot/config/plugins/ai-assistant-claude/state/config/.credentials.json'),
+    );
+    foreach ($ok as $a) { $p = ua_plan($a); if ($p[2] !== null) { echo "FAIL: should allow " . implode(' ', $a) . ": $p[2]\n"; $fail++; } }
+    foreach ($no as $a) { $p = ua_plan($a); if ($p[2] === null) { echo "FAIL: should refuse " . implode(' ', $a) . "\n"; $fail++; } }
+    // real cat end-to-end through a temp file
+    $f = tempnam(sys_get_temp_dir(), 'uas');
+    file_put_contents($f, "ADMIN_PASSWORD=zzz12345\nNAME=ok\n");
+    $self = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__FILE__) . ' cat ' . escapeshellarg($f);
+    $o = shell_exec($self);
+    if ($o === null || strpos($o, 'zzz12345') !== false || strpos($o, 'NAME=ok') === false) { echo "FAIL: cat e2e: " . var_export($o, true) . "\n"; $fail++; }
+    unlink($f);
+    echo $fail === 0 ? "ua-sanitize selftest OK\n" : "ua-sanitize selftest FAILED: $fail\n";
+    return $fail === 0 ? 0 : 1;
+}
+
+$args = array_slice($argv, 1);
+if (count($args) && $args[0] === '--selftest') exit(ua_selftest());
+list($exec, $files, $err) = ua_plan($args);
+if ($err !== null) ua_die($err);
+if ($files !== null) {
+    $rc = 0;
+    foreach ($files as $f) {
+        if (!is_file($f) || !is_readable($f)) { fwrite(STDERR, "ua-sanitize: cannot read $f\n"); $rc = 1; continue; }
+        $d = file_get_contents($f);
+        if (strlen($d) > 5 * 1024 * 1024) { fwrite(STDERR, "ua-sanitize: $f too large\n"); $rc = 1; continue; }
+        echo aia_mask($d);
+    }
+    exit($rc);
+}
+list($rc, $out, $e) = ua_run($exec);
+echo aia_mask($out);
+if ($e !== '') fwrite(STDERR, aia_mask($e));
+exit($rc);

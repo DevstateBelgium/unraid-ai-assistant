@@ -1,0 +1,39 @@
+/* AI Assistant for Unraid - styles. Neutral colours that work on all Unraid themes. */
+.aia-root { max-width: 1200px; }
+.aia-disclaimer { padding: 8px 12px; border-left: 4px solid #ff8c2f; background: rgba(255,140,47,.12); margin: 0 0 14px 0; }
+.aia-msg { padding: 8px 12px; margin: 0 0 12px 0; border-radius: 3px; white-space: pre-wrap; }
+.aia-msg.aia-ok { background: rgba(60,160,70,.18); border: 1px solid rgba(60,160,70,.6); }
+.aia-msg.aia-err { background: rgba(220,50,50,.15); border: 1px solid rgba(220,50,50,.6); }
+.aia-grid { display: flex; flex-wrap: wrap; gap: 16px; }
+.aia-card { flex: 1 1 420px; min-width: 300px; padding: 4px 16px 10px 16px; border: 1px solid rgba(128,128,128,.4); border-radius: 4px; background: rgba(128,128,128,.07); }
+.aia-card h3 { margin: 10px 0; }
+.aia-val { font-weight: bold; }
+.aia-actions button { margin: 2px 4px 2px 0; }
+.aia-kv td { padding: 2px 16px 2px 0; }
+.aia-kv td:first-child { opacity: .75; }
+.aia-hint { opacity: .75; margin-left: 8px; }
+p.aia-hint { margin-left: 0; }
+.aia-redwarn { color: #e22828; margin-top: 6px; }
+.aia-warnbox { padding: 8px 12px; border: 1px solid #ff8c2f; border-radius: 3px; margin-bottom: 8px; }
+.aia-steps { list-style: none; margin: 8px 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.aia-steps li { padding: 2px 0; }
+.aia-steps li .fa { width: 1.4em; text-align: center; opacity: .7; }
+.aia-summary { padding: 8px 12px; background: rgba(60,160,70,.15); border-radius: 3px; white-space: pre-wrap; }
+.aia-spin { display: inline-block; width: 16px; height: 16px; vertical-align: middle; border: 2px solid rgba(128,128,128,.4); border-top-color: #ff8c2f; border-radius: 50%; animation: aia-rot .8s linear infinite; }
+@keyframes aia-rot { to { transform: rotate(360deg); } }
+.aia-split { display: flex; flex-wrap: wrap; gap: 16px; }
+.aia-side { flex: 1 1 320px; max-width: 460px; }
+.aia-main { flex: 3 1 480px; }
+.aia-table { width: 100%; border-collapse: collapse; }
+.aia-table th, .aia-table td { padding: 4px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(128,128,128,.25); }
+.aia-click { cursor: pointer; }
+.aia-click:hover, .aia-sel { background: rgba(255,140,47,.15); }
+.aia-nowrap { white-space: nowrap; }
+.aia-wrap { word-break: break-all; font-family: monospace; font-size: 0.9em; }
+.aia-pager button { min-width: 3em; }
+.aia-danger-h { color: #e22828; margin-top: 28px; }
+.aia-dangerbox { border: 1px solid #e22828; border-radius: 4px; padding: 4px 16px 8px 16px; }
+#aia-settings input.narrow { width: 6em; }
+#aia-settings input[type=text], #aia-settings textarea { max-width: 100%; }
+.aia-model-custom { margin-left: 8px; }
+textarea#aia-mem-text, textarea#aia-adv-settings, textarea#aia-adv-claude { font-family: monospace; }

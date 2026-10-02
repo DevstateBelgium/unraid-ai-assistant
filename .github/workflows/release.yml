@@ -1,0 +1,100 @@
+name: Release
+
+# Push a tag named after the version (YYYY.MM.DD or YYYY.MM.DD[a-z], e.g. 2026.10.03 or 2026.10.03a).
+# The workflow lints, builds the package, publishes the GitHub release (package + checksum), and only then
+# commits the regenerated plugin/ai-assistant-claude.plg to main, so the .plg never points at a missing file.
+on:
+  push:
+    tags:
+      - '20[0-9][0-9].[0-9][0-9].[0-9][0-9]'
+      - '20[0-9][0-9].[0-9][0-9].[0-9][0-9][a-z]'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag format
+        run: |
+          if ! [[ "$TAG" =~ ^20[0-9]{2}\.[0-9]{2}\.[0-9]{2}[a-z]?$ ]]; then
+            echo "::error::tag '$TAG' is not YYYY.MM.DD or YYYY.MM.DD[a-z]"
+            exit 1
+          fi
+          date -u -d "${TAG:0:4}-${TAG:5:2}-${TAG:8:2}" >/dev/null || { echo "::error::'$TAG' is not a valid date"; exit 1; }
+
+      - name: Install PHP CLI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq php-cli
+
+      - name: Lint
+        run: |
+          set -e
+          bash -n build.sh
+          src=src/usr/local/emhttp/plugins/ai-assistant-claude
+          # shell scripts: everything under scripts/ and event/ that is not PHP
+          while IFS= read -r -d '' f; do
+            head -c 64 "$f" | grep -q 'php' && continue
+            bash -n "$f"
+          done < <(find "$src/scripts" "$src/event" -type f ! -name '*.php' ! -name ua-sanitize -print0)
+          # PHP (ua-sanitize is a PHP script without extension; .page files start with a header, so the build lints them)
+          while IFS= read -r -d '' f; do php -l "$f" >/dev/null; done \
+            < <(find "$src" \( -name '*.php' -o -name ua-sanitize \) -print0)
+
+      - name: Build package and plugin definition
+        run: ./build.sh "$TAG"
+
+      - name: Create or update the GitHub release
+        run: |
+          set -e
+          txz="dist/ai-assistant-claude-$TAG-noarch-1.txz"
+          files=("$txz" "$txz.sha256")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists, refreshing notes and assets"
+            gh release edit "$TAG" --title "$TAG" --notes-file dist/release-notes.md
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --title "$TAG" --notes-file dist/release-notes.md --verify-tag
+          fi
+
+      - name: Commit the regenerated plugin definition to main
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp plugin/ai-assistant-claude.plg "$RUNNER_TEMP/new.plg"
+          git fetch origin main
+          # Only a tag that is part of main may update main's .plg (re-running an old tag must not move it back).
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::warning::tag $TAG is not reachable from main; leaving plugin/ai-assistant-claude.plg alone"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            git checkout -q -f -B main origin/main
+            cp "$RUNNER_TEMP/new.plg" plugin/ai-assistant-claude.plg
+            if git diff --quiet -- plugin/ai-assistant-claude.plg; then
+              echo "plugin/ai-assistant-claude.plg already up to date"
+              exit 0
+            fi
+            git add plugin/ai-assistant-claude.plg
+            git commit -q -m "Release $TAG: update plugin definition"
+            if git push origin main; then exit 0; fi
+            echo "push failed (attempt $attempt), refetching"
+            git fetch origin main
+          done
+          echo "::error::could not push the plugin definition to main"
+          exit 1
